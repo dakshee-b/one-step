@@ -1,0 +1,16 @@
+# Apache rewrite rules for the MedDrop front controller.
+# Routes all non-file, non-directory requests to index.php so the PHP router
+# handles them. Static files (CSS/JS/images/uploads) are served directly.
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Preserve the original URI in REQUEST_URI for the PHP script.
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# Sensible defaults
+Options -Indexes
+DirectoryIndex index.php index.html
