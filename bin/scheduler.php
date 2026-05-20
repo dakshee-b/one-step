@@ -146,8 +146,8 @@ function dispatch_due_doses(): int
     $pdo   = Database::pdo();
     $topic = Database::config()['mqtt']['topics']['dispense_command'];
 
-    // Dispatch 3 minutes BEFORE scheduled_at so the Arduino's prenotice (60s) +
-    // ready-hold (120s) lands the AUTH prompt at the actual scheduled time.
+    // Dispatch 48 s BEFORE scheduled_at so the Arduino's prenotice (30s) +
+    // rotate+settle (~3s) + ready-hold (15s) lands AUTH at the scheduled time.
     $stmt = $pdo->prepare("
         SELECT de.id, de.user_id, m.id AS medication_id, m.slot_number, m.name, m.pills_per_dose,
                u.rfid_uid
@@ -156,7 +156,7 @@ function dispatch_due_doses(): int
         JOIN users u       ON u.id = de.user_id
         WHERE de.status = 'pending'
           AND de.command_sent_at IS NULL
-          AND de.scheduled_at <= DATE_ADD(NOW(), INTERVAL 3 MINUTE)
+          AND de.scheduled_at <= DATE_ADD(NOW(), INTERVAL 48 SECOND)
     ");
     $stmt->execute();
     $events = $stmt->fetchAll();
@@ -195,7 +195,8 @@ function mark_missed_doses(): int
     $miss = (int) Database::config()['scheduler']['miss_window_minutes'];
 
     $stmt = $pdo->prepare("
-        SELECT de.id, de.user_id, de.medication_id, de.scheduled_at, m.name
+        SELECT de.id, de.user_id, de.medication_id, de.scheduled_at,
+               m.name, m.slot_number
         FROM dose_events de
         JOIN medications m ON m.id = de.medication_id
         WHERE de.status = 'pending'
@@ -214,12 +215,22 @@ function mark_missed_doses(): int
         VALUES (?, 'warning', 'Missed dose', ?, ?, ?)
     ");
 
+    $missedTopic = Database::config()['mqtt']['topics']['missed'] ?? 'pill/missed';
+
     foreach ($events as $e) {
         $upd->execute([$e['id']]);
         $clock = date('g:i A', strtotime($e['scheduled_at']));
         $desc  = $e['name'] . " — at $clock";
         $notif->execute([
             (int) $e['user_id'], $desc, (int) $e['medication_id'], (int) $e['id'],
+        ]);
+
+        // Tell the Arduino so it can show "Missed dose" on the LCD.
+        // Fire-and-forget; if MQTT fails, the DB transition is the source of truth.
+        MqttPublisher::publish($missedTopic, [
+            'slot'           => (int) $e['slot_number'],
+            'medicationName' => $e['name'],
+            'timestamp'      => date('c'),
         ]);
     }
     return count($events);

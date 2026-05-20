@@ -90,6 +90,7 @@ export const api = {
   // ----- Medications -----
   getMedications: () => request('GET', '/medications'),
   updateMedication: (id, payload) => request('PUT', `/medications/${id}`, { body: payload }),
+  refillMedication: (id) => request('POST', `/medications/${id}/refill`),
 
   // ----- Dashboard -----
   getOverview: () => request('GET', '/dashboard/overview'),

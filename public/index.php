@@ -101,8 +101,9 @@ $router->delete('/api/v1/profile/photo', [ProfileController::class, 'deletePhoto
 // -----------------------------------------------------------------------------
 // Medications (3 fixed slots — no POST/DELETE)
 // -----------------------------------------------------------------------------
-$router->get('/api/v1/medications',      [MedicationController::class, 'index']);
-$router->put('/api/v1/medications/{id}', [MedicationController::class, 'update']);
+$router->get ('/api/v1/medications',             [MedicationController::class, 'index']);
+$router->put ('/api/v1/medications/{id}',        [MedicationController::class, 'update']);
+$router->post('/api/v1/medications/{id}/refill', [MedicationController::class, 'refill']);
 
 // -----------------------------------------------------------------------------
 // Dashboard & adherence

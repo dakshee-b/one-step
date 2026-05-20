@@ -50,7 +50,7 @@ return [
     // -------------------------------------------------------------------
     'scheduler' => [
         'upcoming_window_minutes'     => 30,
-        'miss_window_minutes'         => 30,
+        'miss_window_minutes'         => 2,
         'notification_retention_days' => 30,
     ],
 
@@ -79,6 +79,8 @@ return [
             'dispense_error'   => 'pill/error',
             'rfid_scan'        => 'rfid/scan',
             'device_boot'      => 'device/boot',
+            'refill'           => 'pill/refill',
+            'missed'           => 'pill/missed',
         ],
     ],
 

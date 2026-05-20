@@ -1,12 +1,13 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/../MqttPublisher.php';
+
 /**
  * Medication endpoints:
- *   GET /api/v1/medications       — return the 3 slot rows (auth)
- *   PUT /api/v1/medications/{id}  — edit name/time/dosage (auth)
- *
- * Refill endpoint (POST /medications/{id}/refill) is deferred per project decision.
+ *   GET  /api/v1/medications              — return the 3 slot rows (auth)
+ *   PUT  /api/v1/medications/{id}         — edit name/time/dosage (auth)
+ *   POST /api/v1/medications/{id}/refill  — refill to 7 + tell Arduino + clear refill notifs
  *
  * Mid-day edit behaviour: when `time` changes, today's dose_event for this
  * medication is shifted to the new scheduled_at IF its status is still
@@ -104,6 +105,67 @@ class MedicationController
         $stmt = $pdo->prepare("SELECT * FROM medications WHERE id = ?");
         $stmt->execute([$id]);
         Response::json(['medication' => self::serialize($stmt->fetch())]);
+    }
+
+    /**
+     * Refill — set remaining_pills back to 7, tell the Arduino to reset its
+     * top-layer servo for this slot, and clear any outstanding "Refill needed"
+     * notifications for this medication.
+     */
+    public function refill(array $params): void
+    {
+        $user = Auth::requireUser();
+        $id   = (int) $params['id'];
+
+        $pdo  = Database::pdo();
+        $stmt = $pdo->prepare("
+            SELECT id, slot_number FROM medications
+            WHERE id = ? AND user_id = ? LIMIT 1
+        ");
+        $stmt->execute([$id, (int) $user['id']]);
+        $med = $stmt->fetch();
+        if (!$med) {
+            Response::error('NOT_FOUND', 'Medication not found', 404);
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare("UPDATE medications SET remaining_pills = 7 WHERE id = ?")
+                ->execute([$id]);
+
+            // Clear any outstanding "Refill needed" notifications for this med.
+            $pdo->prepare("
+                DELETE FROM notifications
+                WHERE user_id = ?
+                  AND related_medication_id = ?
+                  AND title = 'Refill needed'
+            ")->execute([(int) $user['id'], $id]);
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+
+        // Tell the Arduino — fire-and-forget. If the broker is unreachable we
+        // still consider the refill successful (DB is source of truth; user
+        // can click again later to retry the device-side reset).
+        $refillTopic = Database::config()['mqtt']['topics']['refill'] ?? 'pill/refill';
+        $ok = MqttPublisher::publish($refillTopic, [
+            'slot'      => (int) $med['slot_number'],
+            'timestamp' => date('c'),
+        ]);
+        if (!$ok) {
+            error_log("[refill] MQTT publish failed for med {$id} slot {$med['slot_number']} — DB updated anyway");
+        }
+
+        // Return the freshly updated row.
+        $row = $pdo->prepare("SELECT * FROM medications WHERE id = ?");
+        $row->execute([$id]);
+        Response::json([
+            'medication'    => self::serialize($row->fetch()),
+            'mqttDelivered' => $ok,
+        ]);
     }
 
     /**

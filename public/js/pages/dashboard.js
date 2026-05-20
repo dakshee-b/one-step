@@ -359,17 +359,22 @@ function renderMedicationCard(med, idx) {
       <div class="pt-2 border-t border-white/70">
         <div class="flex justify-between text-xs mb-1.5">
           <span class="text-gray-500">Remaining Pills in Dispenser</span>
-          <span class="${remaining <= 2 ? 'text-red-600' : 'text-gray-500'}">
+          <span class="${remaining === 0 ? 'text-red-600' : remaining <= 3 ? 'text-amber-600' : 'text-gray-500'}">
             ${remaining}/${capacity}
           </span>
         </div>
         <div class="h-2 bg-white/80 rounded-full overflow-hidden border border-gray-200">
           <div class="h-full rounded-full transition-all ${
-            remaining <= 2 ? 'bg-red-500' : remaining <= 4 ? 'bg-amber-400' : c.dot
+            remaining === 0 ? 'bg-red-500' : remaining <= 3 ? 'bg-amber-400' : c.dot
           }" style="width: ${(remaining / capacity) * 100}%"></div>
         </div>
-        ${remaining <= 2 ? `
-          <p class="text-xs text-red-600 mt-1 flex items-center gap-1">
+        ${remaining === 0 ? `
+          <button data-refill-med="${med.medicationId}" class="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 hover:bg-red-200 text-red-700 transition-colors">
+            <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+            <span>Refill medication</span>
+          </button>
+        ` : remaining <= 3 ? `
+          <p class="text-xs text-amber-700 mt-1 flex items-center gap-1">
             <i data-lucide="alert-circle" class="w-3 h-3"></i> Refill soon
           </p>
         ` : ''}
@@ -385,8 +390,13 @@ function renderWeeklyChart(medNames, weekly) {
 
   let barsHTML = '';
   days.forEach((d) => {
-    const totalUnits = d.p1 + d.p2 + d.p3 + d.missed + d.upcoming;
-    const barH = (totalUnits / MAX_UNITS) * CHART_H;
+    const rawTotal   = d.p1 + d.p2 + d.p3 + d.missed + d.upcoming;
+    const totalUnits = Math.min(rawTotal, MAX_UNITS);
+    // If data has more events than MAX_UNITS (shouldn't happen in clean data
+    // but does after manual test pollution), scale segments proportionally so
+    // the bar never exceeds the chart area.
+    const scale     = rawTotal > MAX_UNITS ? MAX_UNITS / rawTotal : 1;
+    const barH      = (totalUnits / MAX_UNITS) * CHART_H;
 
     const segments = [
       { val: d.p1, color: CONFIG.MED_COLORS[0].hex },
@@ -398,7 +408,7 @@ function renderWeeklyChart(medNames, weekly) {
 
     let segmentsHTML = '';
     segments.forEach(s => {
-      const segH = (s.val / MAX_UNITS) * CHART_H;
+      const segH = (s.val * scale / MAX_UNITS) * CHART_H;
       segmentsHTML += `<div style="height: ${segH}px; background: ${s.color}; flex-shrink: 0;"></div>`;
     });
 
@@ -773,6 +783,30 @@ function attachAllListeners() {
         console.error('Failed to save medication', err);
         alert(err.message || 'Could not save medication');
       } finally {
+        btn.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-refill-med]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      const medId = parseInt(e.currentTarget.getAttribute('data-refill-med'), 10);
+      const label = btn.querySelector('span');
+      const original = label ? label.textContent : '';
+      btn.disabled = true;
+      if (label) label.textContent = 'Refilling...';
+      try {
+        await api.refillMedication(medId);
+        await refreshTodayAndOverview();
+        // Also refresh notifications since "Refill needed" got cleared.
+        const notif = await api.getNotifications();
+        dashboardData.notifications = notif.notifications ?? [];
+        dashboardData.unreadCount = (notif.notifications ?? []).filter(n => !n.isRead).length;
+        renderPage();
+      } catch (err) {
+        console.error('Failed to refill medication', err);
+        alert(err.message || 'Could not refill');
+        if (label) label.textContent = original;
         btn.disabled = false;
       }
     });
